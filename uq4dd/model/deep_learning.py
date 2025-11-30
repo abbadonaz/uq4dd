@@ -12,7 +12,7 @@ from torchmetrics import MinMetric, MeanMetric
 from sklearn.linear_model import LogisticRegression
 
 from uq4dd.model.predictor.mlp import MLP
-from uq4dd.utils.loss_functions import CensoredMSELoss, TobitLoss, EvidentialLoss, CensoredEvidentialLoss
+from uq4dd.utils.loss_functions import CensoredMSELoss, TobitLoss, EvidentialLoss, CensoredEvidentialLoss, ExtendedCensoredEvidentialLoss
 from uq4dd.utils.uncertainty_metrics import recalibrate_uq_linear
 from uq4dd.utils.metrics import BestMinMetric
 from uq4dd.utils.VennABERS import ScoresToMultiProbs
@@ -78,7 +78,10 @@ class DeepDTI(LightningModule):
                 self.criterion = TobitLoss() if censored else GaussianNLLLoss()
             else: 
                 assert predictor.name == 'Evidential', f'Model {predictor.name} is not yet implemented.'
-                self.criterion = CensoredEvidentialLoss() if censored else EvidentialLoss()
+                if censored:
+                    self.criterion = ExtendedCensoredEvidentialLoss()
+                else:
+                    self.criterion = EvidentialLoss()
             assert recalibrate in ['none', 'uq_linear'], f'Recalibration {recalibrate} not supported for regression.'
         assert objective in ['classification', 'regression'], f'No loss function defined for objective {objective}.'
         

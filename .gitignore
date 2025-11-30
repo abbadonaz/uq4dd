@@ -144,3 +144,6 @@ checkpoints/
 # Bash
 scripts
 
+myenv/pyvenv.cfg
+myenv/share/man/man1/isympy.1
+myenv/share/man/man1/ttx.1

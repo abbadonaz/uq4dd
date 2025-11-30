@@ -4,7 +4,7 @@ import torch
 import numpy as np
 from torch.nn.modules.loss import _Loss
 from torch.nn import GaussianNLLLoss
-
+from torch.distributions import StudentT
 class CensoredMSELoss(_Loss):
     '''
     Re-implementation of the CensoredMSE loss proposed by Arany et al., (2022).
@@ -200,4 +200,68 @@ class BayesLoss(_Loss):
             log_likelihood /= 2
         kl /= self.n_train_batches
         return kl + log_likelihood
+    
 
+class ExtendedCensoredEvidentialLoss(_Loss):
+    """
+    An extended censored evidential loss:
+    Uncensored - use student-t PDF (negative log-likelihood)
+    Left-censored - use -log CDF
+    Right censored - use -log(1-CDF)
+
+    NIG parameters: (gamma, v, alpha, beta)
+    Predictive distribution is Student-t with:
+        df = 2 * alpha
+        loc = gamma
+        scale = sqrt(beta * (1 + v) / (v * alpha))
+    """
+
+    def __init__(self, reduction='mean', coeff=1.0, omega=0.01, kl=False, eps=1e-8):
+        super().__init__()
+        self.reduction = reduction
+        self.coeff = coeff
+        self.omega = omega
+        self.kl = kl
+        self.eps = eps
+    
+    def student_t_params(self, gamma, v, alpha, beta):
+        df = 2 * alpha
+        scale = torch.sqrt(beta * (1 + v) / (v * alpha))
+        return df, gamma, scale
+    
+    def NIG_Reg(self, target, gamma, v, alpha, beta):
+        error = torch.abs(target - gamma)
+        evidence = 2 * v + alpha   # standard evidential regularizer
+        return error * evidence
+    
+    def forward(self, target_dict, gamma, v, alpha, beta):
+        mask = target_dict["Operator"]      # -1 = left, 0 = uncensored, +1 = right
+        y = target_dict["Label"]
+
+        df, loc, scale = self.student_t_params(gamma, v, alpha, beta)
+        dist = StudentT(df=df, loc=loc, scale=scale)
+
+        loss = torch.zeros_like(y)
+
+        # For uncensored points, use the negative log likelihood
+        unc_mask = (mask == 0)
+        if unc_mask.any():
+            loss[unc_mask] = -dist.log_prob(y[unc_mask])
+
+        # For right censored points, use - log(1-CDF)
+        right_mask = (mask == 1)
+        if right_mask.any():
+            tail_prob = 1.0 - dist.cdf(y[right_mask])
+            loss[right_mask] = -torch.log(tail_prob + self.eps)
+
+        # For left censored points, use -log(CDF)
+        left_mask = (mask == -1)
+        if left_mask.any():
+            cdf_val = dist.cdf(y[left_mask])
+            loss[left_mask] = -torch.log(cdf_val + self.eps)
+
+        # evidential regularizer (only uncensored contributes fully, censored points work partially)
+        reg = self.NIG_Reg(y, gamma, v, alpha, beta)
+        loss = loss + self.coeff * reg
+
+        return loss.mean() if self.reduction == 'mean' else loss
